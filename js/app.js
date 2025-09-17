@@ -6,13 +6,14 @@
 
 /* ---------CONSTANTS ------- */
 const DEFAULT_ENCODING = "iso-8859-1";
+const FRAME_HEADER_LENGTH = 10;
 const NULLBYTE = 0x00;
 const TEXT_INFO_FRAMES = new Set(["TALB", "TBPM", "TCOM",
   "TCON", "TCOP", "TDAT", "TDLY", "TENC", "TEXT", "TFLT", "TIME", "TIT1",
   "TIT2", "TIT3", "TKEY", "TLAN", "TMED", "TYER", "TOAL", "TOFN", "TOLY",
   "TOPE", "TORY", "TOWN", "TPE1", "TPE2", "TPE3", "TPE4", "TPOS","TPUB",
   "TRCK", "TSRC", "TSIZ" ]);
-const SUPPORTED_FRAMES = new Set([...TEXT_INFO_FRAMES.values(), "COMM"])
+const SUPPORTED_FRAMES = new Set([...TEXT_INFO_FRAMES.values(), "COMM", "APIC"])
 const NUMERIC_STRINGS = new Set(["TPOS", "TRCK", "TSIZ", "TYER", "TDAP", "TDLY", "TIME", "TLEN"]);
 const METADATA_MAP = {
   'TIT2': 'title', 'TALB': 'album', 'TPUB': 'publisher', 'TCON': 'genre',
@@ -50,17 +51,40 @@ function toHex(array) {
 }
 
 
-function decodeSynchSafe(bytes, msbIndex) {
+function decodeSynchSafe(bytes, start) {
   // https://phoxis.org/2010/05/08/synch-safe/
-  return ((bytes[msbIndex] & 0x7f) << 21) |
-  ((bytes[msbIndex + 1] & 0x7f) << 14) | ((bytes[msbIndex + 2]  & 0x7f) << 7) | (bytes[msbIndex + 3] & 0x7f);
+  return ((bytes[start] & 0x7f) << 21) |
+  ((bytes[start + 1] & 0x7f) << 14) | ((bytes[start + 2]  & 0x7f) << 7) | (bytes[start + 3] & 0x7f);
 }
 
 function encodeSynchSafe(x) {
-  // assumes 32-bit synchsafe creation
-  const out = new Uint8Array(4);
+  // encodes a 32-bit integer into a byte array representing 28-bit synchsafe encoding
+  if (x > 0x0FFFFFFF) {
+    throw new Error(`${x} is too large to be encoded into synchsafe.`);
+  }
+  if (x < 0b1000) { // integer already valid
+    return new Uint8Array([0, 0, 0, x]);
+  }
+  return new Uint8Array([0x7F & (x >> 21), 0x7F & (x >> 14), 0x7F & (x >> 7), 0x7F & x]);
 
-  return out;
+}
+
+function encodeStringToUTF16LE(s, withBOM = true){
+  // convert a string into a utf-16 little-endian byte array
+  // https://unicode.org/faq/utf_bom.html#utf16-3
+  const bytes = new Uint8Array(s.length * 2);
+  const view = new DataView(bytes.buffer);
+  for (let i = 0; i < s.length; i++){
+    view.setUint16(i * 2, s.charCodeAt(i), true);
+  }
+  if (withBOM) {
+    const bom = new Uint8Array(bytes.length + 2); // unicode BOM indicating little endian
+    bom[0] = 0xFF
+    bom[1] = 0xFE
+    bom.set(bytes, 2);
+    return bom;
+  }
+  return bytes;
 }
 
 function encodeStringToLatin1(s){
@@ -72,31 +96,57 @@ function encodeStringToLatin1(s){
   return out;
 }
 
-function getFrameHeader(frameId, length){
+function createFrameHeader(frameId, contentLength){
   if (frameId.length !== 4){
     throw Error
   }
-  // const encoder = new TextEncoder();
-  // const decoder = new TextDecoder(DEFAULT_ENCODING);
 
-
-  const header = new Uint8Array([
-    ...encodeStringToLatin1(frameId), ...encodeSynchSafe(length) , 0x00, 0x00
+  return new Uint8Array([
+    ...encodeStringToLatin1(frameId), ...encodeSynchSafe(contentLength + FRAME_HEADER_LENGTH), 0x00, 0x00
   ]);
-
-  return header;
 }
 
-function writeTextFrame(text, frameId){
-  const header = getFrameHeader(frameId, text.length);
-  console.log(header);
+function parseTextFrame(bytes) {
+  const frameSize = bytes.byteLength;
+  const decoder = new TextDecoder(ENCODING_LOOKUP[bytes[FRAME_HEADER_LENGTH]]);
+  let offset = 1;
+  if (decoder.encoding === "utf-16le"){
+    offset += 2;     // ignore BOM
+  }
+  const content = decoder.decode(bytes.slice(
+    FRAME_HEADER_LENGTH + offset,
+    FRAME_HEADER_LENGTH + offset + frameSize));
+  return stripTrailingNulls(content);
+}
 
-  const frame = new Uint8Array([]);
-  // text.forEach((c) => {c.charC})
+
+
+
+function writeTextFrame(text, frameId){
+  const encodedText = encodeStringToUTF16LE(text);
+  const header = createFrameHeader(frameId, encodedText.length);
+  const frame = new Uint8Array(FRAME_HEADER_LENGTH + 1 + encodedText.length);
+  const view = new DataView(frame.buffer);
+  frame.set(header, 0);
+  view.setUint8(FRAME_HEADER_LENGTH, 0x01); // set unicode encoding
+  frame.set(encodedText, FRAME_HEADER_LENGTH + 1);
   return frame;
 }
 
-writeTextFrame("hello", "TIT1");
+
+function writeCommentFrame(comment){
+  const encodedText = encodeStringToUTF16LE(comment);
+  const header = createFrameHeader("COMM", encodedText.length);
+}
+
+function writePictureFrame(imageBytes) {
+  const header = createFrameHeader("APIC", imageBytes.byteLength);
+  // const imageHeader = new Uint8Array();
+  // const frame = new Uint8Array(DEFAULT_ID3V2_HEADER_LEN);
+
+  // return frame;
+}
+
 
 function findByte(bytes, pos, target){
   target = target & 0xff; // ensure within 0-255 range
@@ -109,8 +159,7 @@ function findByte(bytes, pos, target){
 async function hashFile(file, algorithm = "SHA-256") {
   const buffer = await file.arrayBuffer();
   const digest = await crypto.subtle.digest(algorithm, buffer);
-  return toHex([... new Uint8Array(digest)])
-  // return [... new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  return toHex([... new Uint8Array(digest)]);
 }
 
 
@@ -165,17 +214,22 @@ function handleID3v2(buffer) {
     /* parse frame header information */
     decoder = new TextDecoder(DEFAULT_ENCODING); // default encoder
     const frameId = decoder.decode(view.subarray(pos, pos + FRAME_ID_SIZE));
-    pos += FRAME_ID_SIZE;
-    /* extract the frame itself based on defined size */
-    const frameSize = decodeSynchSafe(view, pos);
-    pos += FRAME_SIZE_INFO_LEN + 2; // skip over frame info and flags bytes
-
-
-    if (!SUPPORTED_FRAMES.has(frameId) && frameId !== "APIC"){ // skip unimplemented frames
-      pos = pos + frameSize;
+    const frameSize = decodeSynchSafe(view, pos + FRAME_ID_SIZE);
+    if (!SUPPORTED_FRAMES.has(frameId)){
+      pos = pos + frameSize + FRAME_HEADER_LENGTH;
       continue;
     }
-    // TODO: implement comments handling
+    if (TEXT_INFO_FRAMES.has(frameId)){ // handle T??? frames
+      let content = parseTextFrame(view.slice(pos, pos + FRAME_HEADER_LENGTH + frameSize), NUMERIC_STRINGS.has(frameId));
+      if (frameId === "TPOS" || frameId === "TRCK")
+        content = content.split('/').at(0);
+      metadata[METADATA_MAP[frameId]] = content;
+      pos = pos + frameSize + FRAME_HEADER_LENGTH;
+
+      continue;
+    }
+    pos += FRAME_HEADER_LENGTH;
+    /* extract the frame itself based on defined size */
     /* extract frame content */
     let offset = 0;
     let content;
@@ -196,30 +250,7 @@ function handleID3v2(buffer) {
       metadata.comments = stripTrailingNulls(decoder.decode(view.subarray(pos, end)));
       pos = end;
     }
-    if (TEXT_INFO_FRAMES.has(frameId)) {
-      decoder = new TextDecoder(ENCODING_LOOKUP[view[pos]]); // text encoding description byte
-      pos++;
-      offset++;
-      if (NUMERIC_STRINGS.has(frameId)){
-        content = decoder.decode(view.subarray(pos, pos + frameSize - offset));
-        if (frameId === "TPOS" || frameId === "TRCK")
-          content = content.split('/').at(0); // format for these is e.g. 1/27 for track 1 of 27 total
-
-      } else {
-        if (decoder.encoding === "utf-16") {
-          // skip unicode BOM
-          pos += 2;
-          offset += 2;
-        }
-        content = decoder.decode(view.subarray(pos, pos + frameSize - offset));
-      }
-      pos += frameSize - offset;
-      if (!frameId in METADATA_MAP) continue;
-      else {
-        metadata[METADATA_MAP[frameId]] = stripTrailingNulls(content);
-      }
-
-    } else if (frameId === "APIC") { // handle attached picture if exists
+    else if (frameId === "APIC") { // handle attached picture if exists
       /* parse additional attached picture header */
       decoder = new TextDecoder( ENCODING_LOOKUP[view.at(pos++)]);
       // get mimetype value
@@ -337,8 +368,7 @@ document.addEventListener("DOMContentLoaded", function () {
     apicInput.hidden = true;
     apicInput.accept = "image/jpeg";
     uploadDiv.addEventListener("click", () => apicInput.click())
-    apicInput.addEventListener("change", () => {
-      console.log('here')})
+    apicInput.addEventListener("change", () => {})
     uploadDiv.appendChild(apicInput);
     apicDiv.appendChild(uploadDiv)
     form.appendChild(apicDiv);
