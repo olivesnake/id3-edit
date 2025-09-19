@@ -7,3 +7,4 @@ dist
 *.mp3
 .idea
 player.js
+.DS_Store

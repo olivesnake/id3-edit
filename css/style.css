@@ -1,20 +1,12 @@
-/*! HTML5 Boilerplate v9.0.1 | MIT License | https://html5boilerplate.com/ */
-
-/* main.css 3.0.0 | MIT License | https://github.com/h5bp/main.css#readme */
-/*
- * What follows is the result of much research on cross-browser styling.
- * Credit left inline and big thanks to Nicolas Gallagher, Jonathan Neal,
- * Kroc Camen, and the H5BP dev community and team.
- */
-
-/* ==========================================================================
-   Base styles: opinionated defaults
-   ========================================================================== */
+@import url('https://fonts.googleapis.com/css2?family=Zalando+Sans+Expanded:ital,wght@0,200..900;1,200..900&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=SUSE+Mono:ital,wght@0,100..800;1,100..800&display=swap');
 
 :root {
   --chalk: #fffffc;
   --unohana: #f7fcfe;
   --white-grey: #dcdddd;
+  --warm-carbon: #1C1B1A;
+  --neutral-ink: #121212;
 }
 
 
@@ -55,20 +47,22 @@ hr {
 }
 
 body {
-  font-family: monospace;
+  font-family: "SUSE Mono", sans-serif;
+  font-optical-sizing: auto;
   margin: 0 auto;
-  max-width: 60%;
+  max-width: 768px;
   font-size: 16px;
   display: flex;
   flex-direction: column;
   justify-content: center;
   align-items: center;
-  background-color:  #1A1A1A;
+  background-color:  #121212
 }
+
 
 @media only screen and (max-width: 1200px) {
   body {
-    max-width: 70%;
+    max-width: 60%;
   }
 }
 
@@ -298,31 +292,39 @@ textarea {
   overflow: hidden;
   text-overflow: ellipsis;
   margin-right: 1em;
+  font-weight: 100;
+  text-transform: capitalize;
 }
 
 .input-group input {
-  flex: 2;
+  flex: 3;
+  font-family: inherit;
+  font-size: inherit;
   width: 100%;
   height: 1.5em;
-  padding: 0.2em;
-  font-family: monospace;
+  padding: 5px;
+  background-color: #e5e4e6;
   border: solid 0.2em var(--white-grey);
 }
 
 
 #save-button {
   height: 2.5em;
-  margin: 0 auto;
+  margin: 0.5em auto 0 auto;
   cursor: pointer;
+  color: black;
   background-color: #e5e4e6;
-  color: darkslategray;
   border: none;
+  border-radius: 0.5em;
   font-weight: 600;
-  font-size: 18px;
+  font-size: inherit;
+  display: flex;
+  justify-content: center;
+  align-items: center;
 }
 
 #save-button:hover {
-  background-color: #dcdddd;
+  background-color: var(--unohana);
   transition: ease-in-out 0.2s;
 }
 
@@ -347,10 +349,11 @@ textarea {
 
 .metadata-form {
   width: 100%;
-  margin: 3em 0 ;
-  padding: 0.5em 1.5em;
-  background-color: var(--chalk);
+  margin: 0 0 3em 0 ;
+  padding: 1em 1.5em;
+  background-color: var(--warm-carbon);
   display: flex;
+  color: white;
   flex-direction: column;
   align-items: center;
   justify-content: center;
@@ -358,7 +361,8 @@ textarea {
 }
 
 #file-upload-div {
-  background-color: var(--chalk);
+  background-color: #1C1B1A;
+  color: white;
   margin: 1.5em;
   padding: 2em;
   width: fit-content;
@@ -366,8 +370,13 @@ textarea {
   justify-content: center;
   align-items: center;
   cursor: pointer;
+  border-radius: 1em;
 
 
+}
+#file-upload-div:hover {
+  background-color: #1A1A1A;
+  transition: ease-in-out 0.2s;
 }
 
 #file-upload-div span {

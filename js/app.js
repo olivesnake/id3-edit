@@ -1,5 +1,7 @@
-/*
 
+/*
+Resources:
+https://www.multiweb.cz/twoinches/mp3inside.htm
  */
 
 
@@ -8,17 +10,24 @@
 const DEFAULT_ENCODING = "iso-8859-1";
 const FRAME_HEADER_LENGTH = 10;
 const NULLBYTE = 0x00;
+const UTF_TERMINATOR = new Uint8Array([NULLBYTE, NULLBYTE]);
 const TEXT_INFO_FRAMES = new Set(["TALB", "TBPM", "TCOM",
   "TCON", "TCOP", "TDAT", "TDLY", "TENC", "TEXT", "TFLT", "TIME", "TIT1",
   "TIT2", "TIT3", "TKEY", "TLAN", "TMED", "TYER", "TOAL", "TOFN", "TOLY",
   "TOPE", "TORY", "TOWN", "TPE1", "TPE2", "TPE3", "TPE4", "TPOS","TPUB",
   "TRCK", "TSRC", "TSIZ" ]);
 const SUPPORTED_FRAMES = new Set([...TEXT_INFO_FRAMES.values(), "COMM", "APIC"])
-const NUMERIC_STRINGS = new Set(["TPOS", "TRCK", "TSIZ", "TYER", "TDAP", "TDLY", "TIME", "TLEN"]);
 const METADATA_MAP = {
   'TIT2': 'title', 'TALB': 'album', 'TPUB': 'publisher', 'TCON': 'genre',
   'TYER': 'release_year', 'TRCK': 'track_number', 'TPOS': 'disc_number', 'TPE1': 'artists',
   'TPE2': 'accompaniment', 'TPE3': 'conductor', 'TPE4': 'remixer', 'TCOM': 'composer', 'APIC': 'picture', 'COMM': 'comments'
+}
+
+const METADATA_KEY_TO_FRAMEID = {
+  'title': 'TIT2', 'album': 'TALB', 'publisher': 'TPUB', 'genre': 'TCON',
+  'release_year': 'TYER', 'track_number': 'TRCK', 'disc_number': 'TPOS',
+  'artists':'TPE1', 'accompaniment': 'TPE2', 'coductor': 'TPE3', 'remixer': 'TPE4',
+  'composer': 'TCOM', 'comments': 'COMM', 'picture': 'APIC'
 }
 const ENCODING_LOOKUP = {
   0: "iso-8859-1",
@@ -38,24 +47,9 @@ const FORM_INPUT_FIELDS = [
   {name: "track_number", type: "number"},
   {name: "disc_number", type: "number"}
 ]
-const DEFAULT_ID3V2_HEADER_LEN = 10;
-const FRAME_SIZE_INFO_LEN = 4;
-const FRAME_ID_SIZE = 4;
 /* ---------CONSTANTS ------- */
 
 
-
-
-function toHex(array) {
-  return array.reduce((acc, cur) => acc + cur.toString(16).padStart(2, '0'), '')
-}
-
-
-function decodeSynchSafe(bytes, start) {
-  // https://phoxis.org/2010/05/08/synch-safe/
-  return ((bytes[start] & 0x7f) << 21) |
-  ((bytes[start + 1] & 0x7f) << 14) | ((bytes[start + 2]  & 0x7f) << 7) | (bytes[start + 3] & 0x7f);
-}
 
 function encodeSynchSafe(x) {
   // encodes a 32-bit integer into a byte array representing 28-bit synchsafe encoding
@@ -87,23 +81,114 @@ function encodeStringToUTF16LE(s, withBOM = true){
   return bytes;
 }
 
-function encodeStringToLatin1(s){
-  const out = new Uint8Array(s.length);
-  for (let i = 0; i < s.length; i++){
-    const c = s.charCodeAt(i);
-    out[i] = (c <= 0xff) ? c : 0x3f;
-  }
-  return out;
+
+function getBE32BitInt(bytes, byteOffset){
+  return (bytes[byteOffset] << 24) | (bytes[byteOffset + 1] << 16) | (bytes[byteOffset + 2] << 8) | bytes[byteOffset + 3]
+}
+function writeBE32BitInt(num) {
+  return new Uint8Array([(num >> 24) & 0xff, (num >> 16) & 0xff, (num >> 8) & 0xff, num & 0xff])
 }
 
-function createFrameHeader(frameId, contentLength){
-  if (frameId.length !== 4){
+// function writeB
+
+/*
+parses ID3v2 frame header information
+Frame ID       $xx xx xx xx (four characters)
+Size           $xx xx xx xx
+Flags          $xx xx
+ */
+function parseFrameHeader(bytes) {
+  const decoder = new TextDecoder(DEFAULT_ENCODING);
+  return {
+    id: decoder.decode(bytes.subarray(0, 4)),
+    size: getBE32BitInt(bytes, 4) + FRAME_HEADER_LENGTH,
+    flags: (bytes[8] << 8) | bytes[9]
+  }
+}
+
+function createFrameHeader(id, size, flags=null){
+  if (id.length !== 4){
     throw Error
   }
+  if (flags === null) flags = new Uint8Array([0x00, 0x00]);
+  const frameIdBytes = new TextEncoder().encode(id);
 
-  return new Uint8Array([
-    ...encodeStringToLatin1(frameId), ...encodeSynchSafe(contentLength + FRAME_HEADER_LENGTH), 0x00, 0x00
-  ]);
+  const header = new Uint8Array(FRAME_HEADER_LENGTH)
+  header.set(frameIdBytes, 0);
+  header.set(writeBE32BitInt(size), 4)
+  header.set(flags, 8)
+  return header;
+}
+
+function decodeId3Text(bytes, encoding) {
+  switch (encoding) {
+    case 0x00:
+      return new TextDecoder(DEFAULT_ENCODING).decode(bytes);
+    case 0x01:
+      return new TextDecoder("utf-16").decode(bytes);
+
+    case 0x02:
+      return new TextDecoder("utf-16be").decode(bytes);
+    case 0x03:
+      return new TextDecoder("utf-8").decode(bytes);
+    default:
+      return new TextDecoder("utf-8").decode(bytes);
+  }
+}
+
+function findNullTerminator(bytes, start, encoding) {
+  if (encoding === 0x00) {
+    for (let i = start; i < bytes.length; i++){
+      if (bytes[i] === 0x00) return i;
+    }
+    return -1;
+  }
+  for (let i = start; i + 1 < bytes.length; i += 2) {
+    if (bytes[i] === 0x00 && bytes[i+1] === 0x00) return i;
+  }
+  return -1;
+}
+
+function parseCommentsFrame(bytes) {
+  const encoding = bytes[FRAME_HEADER_LENGTH];
+  let pos = FRAME_HEADER_LENGTH + 1;
+  // skip over language const language = new TextDecoder().decode(bytes.subarray(pos, pos + 3));
+  pos += 3;
+  pos = findNullTerminator(bytes, pos, encoding);
+  if (pos === - 1){
+
+  }
+  // const description = decodeId3Text(bytes.subarray(FRAME_HEADER_LENGTH + 1 + 3, pos))
+  const terminatorLength = (encoding === 0x00) ? 1: 2;
+  return stripTrailingNulls(decodeId3Text(bytes.subarray(pos + terminatorLength), encoding))
+}
+
+function parsePictureFrame(bytes) {
+  let pos = FRAME_HEADER_LENGTH;
+  const encoding = bytes[pos++];
+  let nullPos =  findNullTerminator(bytes, pos, 0);
+  const mimeType = decodeId3Text(bytes.subarray(pos, nullPos), 0)
+  // seek to end of description
+  pos = findNullTerminator(bytes, nullPos, encoding); // skip over picture type
+  let imgBytes;
+  if (mimeType === "image/jpeg") {
+    // seek to SOI (start of image) marker
+    let j = pos;
+    while (bytes[j] !== 0xFF && bytes[j + 1] !== 0xd9) j++;
+    imgBytes = bytes.slice(j)
+  }
+  else if (mimeType === "image/png") {
+    // seek to PNG file signature
+    let j = pos;
+    while (
+      bytes[j] !== 0x89 &&  bytes[j + 1] !== 0x50 &&
+        bytes[j + 2] !== 0x4e &&  bytes[j + 3] !== 0x47 &&
+        bytes[j + 4] !== 0x0D &&  bytes[j + 5] !== 0x0A &&
+        bytes[j + 6] !== 0x1A &&  bytes[j + 7] !== 0x0A
+      ) j++;
+      imgBytes = bytes.slice(j)
+  }
+  return {mimeType: mimeType, bytes: imgBytes}
 }
 
 function parseTextFrame(bytes) {
@@ -124,7 +209,7 @@ function parseTextFrame(bytes) {
 
 function writeTextFrame(text, frameId){
   const encodedText = encodeStringToUTF16LE(text);
-  const header = createFrameHeader(frameId, encodedText.length);
+  const header = createFrameHeader(frameId, encodedText.length + 1);
   const frame = new Uint8Array(FRAME_HEADER_LENGTH + 1 + encodedText.length);
   const view = new DataView(frame.buffer);
   frame.set(header, 0);
@@ -133,40 +218,85 @@ function writeTextFrame(text, frameId){
   return frame;
 }
 
+function writeCustomTextFrame(text, description="") {
+  const encoding = 0x01;
+  const textBytes = encodeStringToUTF16LE(text);
+  const descriptionBytes = encodeStringToUTF16LE(description);
+  const descriptionTerminator = new Uint8Array([0x00, 0x00]);
+  const body = new Uint8Array(
+    1
+    + descriptionBytes.length + 2
+    + textBytes.length
+  )
+  let pos = 0;
+  body[pos++] = encoding;
+  body.set(descriptionBytes, pos); pos += descriptionBytes.length;
+  body.set(descriptionTerminator, pos); pos += 2;
+  body.set(textBytes, pos);
+  const header = createFrameHeader("TXXX", body.length)
+  const frame = new Uint8Array(header.length + body.length)
+  frame.set(header, 0)
+  frame.set(body, header.length)
+  return frame;
+}
 
-function writeCommentFrame(comment){
+
+function writeCommentFrame(comment, language="eng", description=""){
   const encodedText = encodeStringToUTF16LE(comment);
-  const header = createFrameHeader("COMM", encodedText.length);
+  const langBytes =  new TextEncoder().encode(language.slice(0, 3)) // 3 ASCII bytes
+  const descriptionBytes = encodeStringToUTF16LE(description);
+
+  const size = 1 + 3 + descriptionBytes.length + UTF_TERMINATOR.length + encodedText.length;
+  const header = createFrameHeader("COMM", size);
+  const body = new Uint8Array(size);
+  let pos = 0;
+  body[pos++] = 0x01; // utf-16 encoding
+  body.set(langBytes, pos); pos += 3;
+  body.set(descriptionBytes, pos); pos += descriptionBytes.length;
+  body.set(UTF_TERMINATOR, pos); pos += UTF_TERMINATOR.length;
+  body.set(encodedText, pos);
+  const frame = new Uint8Array(FRAME_HEADER_LENGTH + body.length)
+  frame.set(header, 0)
+  frame.set(body, header.length);
+
+  return frame;
+
+
 }
 
-function writePictureFrame(imageBytes) {
-  const header = createFrameHeader("APIC", imageBytes.byteLength);
-  // const imageHeader = new Uint8Array();
-  // const frame = new Uint8Array(DEFAULT_ID3V2_HEADER_LEN);
+function writePictureFrame(imageBytes, description="the cover image", pictureType=0x03, mimetype="image/jpeg") {
+  const encoding = 0x01; // utf-16 w/ BOM (v2.3)
+  const encodedDescription = encodeStringToUTF16LE(description, true);
+  const descTerminator = new Uint8Array([0x00, 0x00]);
+  const mimeBytes = new TextEncoder().encode(mimetype)
+  const mimeTerminator = new Uint8Array([0x00]);
 
-  // return frame;
+  const body = new Uint8Array(
+    1 // encoding byte
+    + mimeBytes.length + 1 // ascii-encoded mimetype string + null terminator
+    + 1 // picture type
+    + encodedDescription.length + 2 // encoded description string with null terminators
+    + imageBytes.length
+  );
+  let pos = 0;
+  body[pos++] = encoding; // text encoding
+  body.set(mimeBytes, pos); pos += mimeBytes.length;
+  body.set(mimeTerminator, pos); pos += 1;
+  body[pos++] = pictureType; // picture type (0x03 = Cover (front))
+  body.set(encodedDescription, pos); pos += encodedDescription.length;
+  body.set(descTerminator, pos); pos += 2;
+  body.set(imageBytes, pos);
+
+  const header = createFrameHeader("APIC", body.length)
+
+  const frame = new Uint8Array(header.length + body.length);
+  frame.set(header, 0)
+  frame.set(body, header.length)
+
+  console.log("written image frame:", frame)
+  return frame;
 }
 
-
-function findByte(bytes, pos, target){
-  target = target & 0xff; // ensure within 0-255 range
-  const len = bytes.length;
-  let j = pos;
-  while (j < len && bytes[j] !== target) j++;
-  return (j < len) ? j : -1;
-}
-
-async function hashFile(file, algorithm = "SHA-256") {
-  const buffer = await file.arrayBuffer();
-  const digest = await crypto.subtle.digest(algorithm, buffer);
-  return toHex([... new Uint8Array(digest)]);
-}
-
-
-async function convertBytesToBase64(u8, type) {
-  const blob = new Blob([u8], {type: type});
-  return await readFileAsDataURL(blob);
-}
 function createDataURLFromBytes(u8, type) {
   const blob = new Blob([u8], {type: type});
   return URL.createObjectURL(blob);
@@ -179,154 +309,89 @@ function stripTrailingNulls(s) {
 }
 
 
-function handleID3v1(buffer) {
-  return {}
+
+
+
+function getID3V2EndIndex(u8){
+  // check size
+  if (u8.length < FRAME_HEADER_LENGTH) return 0;
+  // check if id3v2 tag exists
+  if (!(u8[0] === 0x49 && u8[1] === 0x44 && u8[2] === 0x33)) return 0; // should be "ID3"
+  const versionMajor = u8[3];
+  if (versionMajor < 3) {
+    throw new Error("versions earlier than ID3v2.3.0 not supported")
+  }
+  const flags = u8[5]; // skip version revision byte
+  if ((flags & 0x10) !== 0) {
+    alert("extended footer not currently supported")
+    throw new Error()
+  }
+  const size = (u8[6] << 28) | (u8[7] << 14) | (u8[8] << 7) | u8[9];
+  const footer = (versionMajor === 4 && (!((flags & 0x10) !== 0))) ? 10 : 0;
+  return FRAME_HEADER_LENGTH + size + footer;
 }
-function handleID3v2(buffer) {
-  /* sources:
-  https://id3.org/id3v2.3.0
-  https://en.wikipedia.org/wiki/JPEG#Syntax_and_structure
-   */
-  let decoder;
-  const view = new Uint8Array(buffer);
-  const isExtendedHeader = Boolean(view.at(6));
-  if (isExtendedHeader) {
-    // TODO: implement extended header handling
-  }
 
-  let metadata = {
-    title: '',
-    album: '',
-    artists: '',
-    accompaniment: '',
-    composer: '',
-    release_year: new Date().getFullYear(),
-    track_number: 1,
-    disc_number: 1,
-    publisher: '',
-    genre: '',
-    picture: null,
-    comments: ''
+
+function id3v23_getMetadata(bytes){
+  const metadata = {
+    title: '', album: '', artists: '', accompaniment: '', composer: '',
+    release_year: new Date().getFullYear(), track_number: 1, disc_number: 1,
+    publisher: '', genre: '', picture: null, comments: ''
   };
-  let pos = DEFAULT_ID3V2_HEADER_LEN; // track byte position
-  let end;
-  while (pos < view.byteLength) {
-    /* parse frame header information */
-    decoder = new TextDecoder(DEFAULT_ENCODING); // default encoder
-    const frameId = decoder.decode(view.subarray(pos, pos + FRAME_ID_SIZE));
-    const frameSize = decodeSynchSafe(view, pos + FRAME_ID_SIZE);
-    if (!SUPPORTED_FRAMES.has(frameId)){
-      pos = pos + frameSize + FRAME_HEADER_LENGTH;
+  const size = bytes.length;
+  let pos = FRAME_HEADER_LENGTH;
+  while (pos < size) {
+    const {id, size} = parseFrameHeader(bytes.subarray(pos, pos + FRAME_HEADER_LENGTH));
+    if (!SUPPORTED_FRAMES.has(id)){
+      pos += size;
       continue;
     }
-    if (TEXT_INFO_FRAMES.has(frameId)){ // handle T??? frames
-      let content = parseTextFrame(view.slice(pos, pos + FRAME_HEADER_LENGTH + frameSize), NUMERIC_STRINGS.has(frameId));
-      if (frameId === "TPOS" || frameId === "TRCK")
-        content = content.split('/').at(0);
-      metadata[METADATA_MAP[frameId]] = content;
-      pos = pos + frameSize + FRAME_HEADER_LENGTH;
-
-      continue;
-    }
-    pos += FRAME_HEADER_LENGTH;
-    /* extract the frame itself based on defined size */
-    /* extract frame content */
-    let offset = 0;
+    const frame = bytes.subarray(pos, pos + size);
+    const key = METADATA_MAP[id];
     let content;
-    if (frameId === "COMM"){
-      decoder = new TextDecoder(ENCODING_LOOKUP[view[pos]]); // text encoding description byte
-      pos++;
-      offset++;
-      // unicode termination string has two null bytes, latin-1 has 1
-      const  descEndIdx = findByte(view, pos, NULLBYTE) + ((decoder.encoding === "utf-16le") ? 2 : 1);
-      offset += descEndIdx - pos;
-      pos = descEndIdx;
-      if (decoder.encoding === "utf-16le") {
-        // skip unicode BOM
-        pos += 2;
-        offset += 2;
-      }
-      end = pos + frameSize - offset;
-      metadata.comments = stripTrailingNulls(decoder.decode(view.subarray(pos, end)));
-      pos = end;
-    }
-    else if (frameId === "APIC") { // handle attached picture if exists
-      /* parse additional attached picture header */
-      decoder = new TextDecoder( ENCODING_LOOKUP[view.at(pos++)]);
-      // get mimetype value
-      let mimeTypeEndIdx = findByte(view, pos, NULLBYTE);
-      const mimeType = decoder.decode(view.subarray(pos, mimeTypeEndIdx));
-      // seek and skip description value and picture type
-      pos = findByte(view, mimeTypeEndIdx + 1, NULLBYTE) + 1;
-      /* parse image */
-      if (mimeType !== "image/jpeg") { // png
-        // TODO: implement png handling
-      } else {
-        // find last occurance of JPEG End Of Image (EOI) marker
-        let endOfImageIdx = view.byteLength - 1;
-        for (; endOfImageIdx > pos; endOfImageIdx--) {
-          if (view[endOfImageIdx - 1] === 0xff && view[endOfImageIdx] === 0xd9){
-            break;
-          }
-        }
-
-        metadata.picture = view.slice(pos, endOfImageIdx);
-        pos = endOfImageIdx + 1;
+    if (TEXT_INFO_FRAMES.has(id)){
+      content = parseTextFrame(frame)
+      if (id === "TPOS" || id === "TRCK") {
+        content = content.split('/').at(0) // e.g. sometimes TRCK shows up as 2/27
       }
     }
+    else if (id === "COMM") {
+      content = parseCommentsFrame(frame)
+    }
+    else if (id === "APIC"){
+      const {mimeType, bytes} = parsePictureFrame(frame)
+      content = bytes;
+      metadata["mimeType"] = mimeType;
+    }
+    metadata[key] = content;
+    pos += size;
   }
-
   return metadata;
 }
-
-async function readFileAsBuffer(file){
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.onabort = () => reject(new DOMException("Read aborted"));
-    reader.readAsArrayBuffer(file);
-  })
-}
-async function readFileAsDataURL(file){
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result);
-    reader.onerror = () => reject(reader.error);
-    reader.onabort = () => reject(new DOMException("Read aborted"));
-    reader.readAsDataURL(file);
-  })
-}
-async function parseMp3Metadata(file) {
-  const buffer = await readFileAsBuffer(file).catch(() => {})
-  const decoder = new TextDecoder(DEFAULT_ENCODING);
-  const tag = new Uint8Array(buffer.slice(0, 128));
-  const identifier = decoder.decode(buffer.slice(0, 3));
-  if (identifier !== "ID3") throw new Error("invalid identifier");
-  // check for ID3v2
-  return (tag[3] !== 3) ? handleID3v1(buffer) : handleID3v2(buffer)
-
-}
-
 
 
 document.addEventListener("DOMContentLoaded", function () {
 
   let objectUrls = []; // track all objectUrls in the app
-  // const audioSource = document.getElementById("audio-source");
   const container = document.getElementById("container");
   const fileUploadInput = document.getElementById("file-upload-input");
   async function CreateEditForm(file) {
-    const metadata = await parseMp3Metadata(file);
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const tagEnd = getID3V2EndIndex(bytes);
+    if (tagEnd === 0)
+      alert("incompatible file")
+    const audio = bytes.subarray(tagEnd); // keep the pure audio bytes for file creation
+    const metadata = id3v23_getMetadata(bytes.subarray(0, tagEnd));
     const itemId = crypto.randomUUID();
     const form = document.createElement("form");
     form.className = "metadata-form";
+    form.id = itemId;
     form.style.width = "100%";
     const fileTitle = document.createElement("div");
     fileTitle.className = "input-group";
     fileTitle.textContent = file.name;
     fileTitle.style.fontSize = "18px";
-    fileTitle.style.fontWeight = "600";
+    fileTitle.style.fontWeight = "bold";
     form.appendChild(fileTitle);
     FORM_INPUT_FIELDS.forEach((data) => {
       const template = document.createElement("template");
@@ -337,9 +402,14 @@ document.addEventListener("DOMContentLoaded", function () {
       type="${data.type}"
       class="input"
       id="${data.name}-input"
-        ${(data.type === "number")? 'min=0': ''}
+        ${(data.type === "number")? 'min=1': ''}
         value='${metadata[data.name]}'>
     </div>`;
+      const input = template.content.firstElementChild.children[1];
+      // update metadata based on input
+      input.addEventListener("input", () => {
+        metadata[data.name] = input.value;
+      })
       form.appendChild(template.content.firstElementChild);
     })
     // add picture field
@@ -355,10 +425,6 @@ document.addEventListener("DOMContentLoaded", function () {
       const obj = createDataURLFromBytes(metadata.picture);
       objectUrls.push(obj);
       uploadDiv.style.background = `#fff url(${obj}) center / contain no-repeat`
-      // uploadDiv.style.backgroundImage = `url(${obj})`;
-      // uploadDiv.style.objectFit = 'scale-down';
-      // uploadDiv.style.objectPosition = 'center';
-
     }
     const apicSpan = document.createElement("span");
     apicSpan.textContent = "Select a Picture";
@@ -366,9 +432,18 @@ document.addEventListener("DOMContentLoaded", function () {
     const apicInput = document.createElement("input");
     apicInput.type = "file";
     apicInput.hidden = true;
+    apicInput.setAttribute("name", "file");
     apicInput.accept = "image/jpeg";
     uploadDiv.addEventListener("click", () => apicInput.click())
-    apicInput.addEventListener("change", () => {})
+    apicInput.addEventListener("change", async () => {
+      const file = apicInput.files[0];
+      const newFileBytes = new Uint8Array(await file.arrayBuffer());
+      metadata.picture = newFileBytes;
+      const obj = createDataURLFromBytes(newFileBytes);
+      objectUrls.push(obj);
+      uploadDiv.style.background = `#fff url(${obj}) center / contain no-repeat`
+
+    })
     uploadDiv.appendChild(apicInput);
     apicDiv.appendChild(uploadDiv)
     form.appendChild(apicDiv);
@@ -378,42 +453,85 @@ document.addEventListener("DOMContentLoaded", function () {
     const template = document.createElement("template");
     template.innerHTML = `<div class="input-group">
     <label for="comments">Comments</label>
-    <textarea name="comments" id="comments" style="resize: none; height:5em; flex: 2">${metadata.comments}
+    <textarea name="comments" id="comments" style="resize: none; height:5em; flex: 3; font-family: inherit; font-size: inherit">${metadata.comments}
 </textarea>
   </div>`
     form.append(template.content.firstElementChild)
 
-    const submitButton = document.createElement("input");
-    submitButton.type = "submit";
-    submitButton.value = "Save";
-    submitButton.id = "save-button";
-    submitButton.style.width = "100%";
-    form.appendChild(submitButton);
+    const saveButton = document.createElement("a");
+    saveButton.innerText = "Save";
+    saveButton.id = "save-button";
+    saveButton.style.width = "100%";
+    saveButton.addEventListener("click", async () => {
+      // create mp3 file
+      const frames = [writeCustomTextFrame(`created with ${window.location.href}`)];
+      for (const key of Object.keys(metadata)){
+        const frameId = METADATA_KEY_TO_FRAMEID[key]
+        if (TEXT_INFO_FRAMES.has(frameId)){
+          frames.push(writeTextFrame(metadata[key], frameId))
+        } else if (frameId === "COMM" && metadata.comments !== "") {
+          frames.push(writeCommentFrame(metadata[key]));
+        } else if (frameId === "APIC" && metadata.picture !== null) {
+          frames.push(writePictureFrame(metadata[key]));
+        }
+      }
+      const size = frames.reduce((acc, cur) => acc + cur.length, 0);
+      const body = new Uint8Array(size);
+      let pos = 0;
+      for (const f of frames) {
+        body.set(f, pos)
+        pos += f.length;
+      }
+      const header = new Uint8Array(10);
+      header.set([0x49, 0x44, 0x33, 0x03, 0x00, 0x00], 0) // "ID3", v2.3.0, no flags set
+      header.set(encodeSynchSafe(size), 6)
+      const outFile = new Blob([header, body, audio ],  {type: "audio/mpeg"})
 
-    form.addEventListener("submit", (event) => {
-      event.preventDefault();
+      const fileUrl = URL.createObjectURL(outFile);
+
+      // prep download for user
+
+      const a = document.createElement("a");
+      a.target = "_blank";
+
+      a.download = file.name;
+      a.href = fileUrl;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(fileUrl), 0)
     })
+
+    form.appendChild(saveButton);
+
     return form;
   }
-  document.getElementById("file-upload-div").addEventListener("click", () => fileUploadInput.click());
-  fileUploadInput.addEventListener("change", async () => {
+  document.getElementById("file-upload-div").addEventListener("click", (event) => {
+    event.stopPropagation();
+    fileUploadInput.click()
+  }, {passive: true});
+  fileUploadInput.addEventListener("change", (event) => {
     const files = fileUploadInput.files;
+    if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {
       const file = files[i];
-      const form = await CreateEditForm(file);
-      form.id = `metadata-upload-form-${i}`;
-      container.appendChild(form);
+      CreateEditForm(file)
+        .then(form => {
+          form.id = `metadata-upload-form-${i}`;
+          container.appendChild(form);
+        })
     }
+    fileUploadInput.value = "";
   })
 
 
-  window.addEventListener("beforeunload", (e) => {
+  window.addEventListener("beforeunload", () => {
     // clean up
-    e.preventDefault();
+    if (objectUrls.length === 0) return;
     objectUrls.forEach((obj) => {
       URL.revokeObjectURL(obj);
     })
-    e.returnValue = '';
+    // e.returnValue = '';
   })
 
 
