@@ -511,10 +511,6 @@ document.addEventListener("DOMContentLoaded", function () {
 
     return form;
   }
-  document.getElementById("file-upload-div").addEventListener("click", (event) => {
-    event.stopPropagation();
-    fileUploadInput.click()
-  }, {passive: true});
   fileUploadInput.addEventListener("change", (event) => {
     const files = fileUploadInput.files;
     if (!files || files.length === 0) return;
