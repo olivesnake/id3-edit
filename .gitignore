@@ -8,3 +8,4 @@ dist
 .idea
 player.js
 .DS_Store
+qodana.yaml
