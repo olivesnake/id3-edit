@@ -376,23 +376,52 @@ document.addEventListener("DOMContentLoaded", function () {
   const container = document.getElementById("container");
   const fileUploadInput = document.getElementById("file-upload-input");
   async function CreateEditForm(file) {
+    const form = document.createElement("form");
+
+    const audioElement = document.createElement("audio");
     const bytes = new Uint8Array(await file.arrayBuffer());
+    const audioURL = URL.createObjectURL(file);
+    audioElement.src = audioURL;
+    // audioElement.play().catch(() => {
+    //   /* autoplay may be blocked; user must press play */
+    // });
+    // audioElement.preload = "auto";
+    objectUrls.push(audioURL);
     const tagEnd = getID3V2EndIndex(bytes);
     if (tagEnd === 0)
       alert("incompatible file")
-    const audio = bytes.subarray(tagEnd); // keep the pure audio bytes for file creation
+    const audioBytes = bytes.subarray(tagEnd); // keep the pure audio bytes for file creation
+
     const metadata = id3v23_getMetadata(bytes.subarray(0, tagEnd));
     const itemId = crypto.randomUUID();
-    const form = document.createElement("form");
+    form.appendChild(audioElement)
+
     form.className = "metadata-form";
     form.id = itemId;
     form.style.width = "100%";
+    const formHeader = document.createElement("div");
+    formHeader.className = "form-header"
     const fileTitle = document.createElement("div");
     fileTitle.className = "input-group";
     fileTitle.textContent = file.name;
     fileTitle.style.fontSize = "18px";
     fileTitle.style.fontWeight = "bold";
-    form.appendChild(fileTitle);
+    formHeader.appendChild(fileTitle);
+    const playButton = document.createElement("button");
+    let isPlaying = false;
+    playButton.textContent = "play";
+    playButton.style.font = "inherit";
+    playButton.onclick = (event) => {
+      event.preventDefault();
+      isPlaying = !isPlaying;
+      playButton.textContent = (isPlaying) ? "pause" : "play";
+      if (isPlaying) {
+        audioElement.play()
+      } else
+        audioElement.pause()
+    }
+    formHeader.appendChild(playButton);
+    form.appendChild(formHeader)
     FORM_INPUT_FIELDS.forEach((data) => {
       const template = document.createElement("template");
       template.innerHTML =
@@ -490,7 +519,7 @@ document.addEventListener("DOMContentLoaded", function () {
       const header = new Uint8Array(10);
       header.set([0x49, 0x44, 0x33, 0x03, 0x00, 0x00], 0) // "ID3", v2.3.0, no flags set
       header.set(encodeSynchSafe(size), 6)
-      const outFile = new Blob([header, body, audio ],  {type: "audio/mpeg"})
+      const outFile = new Blob([header, body, audioBytes ],  {type: "audio/mpeg"})
 
       const fileUrl = URL.createObjectURL(outFile);
 
@@ -511,7 +540,7 @@ document.addEventListener("DOMContentLoaded", function () {
 
     return form;
   }
-  fileUploadInput.addEventListener("change", (event) => {
+  fileUploadInput.addEventListener("change", () => {
     const files = fileUploadInput.files;
     if (!files || files.length === 0) return;
     for (let i = 0; i < files.length; i++) {

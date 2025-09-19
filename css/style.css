@@ -8,6 +8,12 @@
   --neutral-ink: #121212;
 }
 
+.form-header {
+  display: flex;
+  flex-direction: row;
+  justify-content: space-between;
+  width: 100%;
+}
 
 html {
   color: #222;
@@ -357,6 +363,7 @@ textarea {
   align-items: center;
   justify-content: center;
   border-radius: 0.7em;
+  box-shadow: black 5px 5px 1em;
 }
 
 .file-upload-div {
@@ -370,7 +377,7 @@ textarea {
   justify-content: center;
   align-items: center;
   cursor: pointer;
-  border-radius: 1em;
+  border-radius: 0.25em;
 
 
 }
