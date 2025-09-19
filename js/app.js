@@ -456,7 +456,12 @@ document.addEventListener("DOMContentLoaded", function () {
     <textarea name="comments" id="comments" style="resize: none; height:5em; flex: 3; font-family: inherit; font-size: inherit">${metadata.comments}
 </textarea>
   </div>`
-    form.append(template.content.firstElementChild)
+    const div = template.content.firstElementChild
+    const textarea = div.children[1];
+    textarea.addEventListener("input", () => {
+      metadata.comments = textarea.value;
+    })
+    form.append(div)
 
     const saveButton = document.createElement("a");
     saveButton.innerText = "Save";
