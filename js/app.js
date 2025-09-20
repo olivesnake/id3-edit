@@ -383,10 +383,6 @@ document.addEventListener("DOMContentLoaded", function () {
     const bytes = new Uint8Array(await file.arrayBuffer());
     const audioURL = URL.createObjectURL(file);
     audioElement.src = audioURL;
-    // audioElement.play().catch(() => {
-    //   /* autoplay may be blocked; user must press play */
-    // });
-    // audioElement.preload = "auto";
     objectUrls.push(audioURL);
     const tagEnd = getID3V2EndIndex(bytes);
     if (tagEnd === 0)
