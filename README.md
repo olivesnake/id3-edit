@@ -9,6 +9,5 @@ a client-side MP3 [ID3](https://id3.org/Home) metadata reader and writer made fr
 
 ### TODO:
 - upload multiple files at once, batch editing common fields (album name, year, etc.)
-- mini audio player functionaliy for each song
 - implement ID3v2.4 compatability
 - add more metadata frame support

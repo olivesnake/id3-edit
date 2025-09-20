@@ -370,6 +370,7 @@ function id3v23_getMetadata(bytes){
 }
 
 
+
 document.addEventListener("DOMContentLoaded", function () {
 
   let objectUrls = []; // track all objectUrls in the app
@@ -407,18 +408,27 @@ document.addEventListener("DOMContentLoaded", function () {
     fileTitle.style.fontSize = "18px";
     fileTitle.style.fontWeight = "bold";
     formHeader.appendChild(fileTitle);
-    const playButton = document.createElement("button");
-    let isPlaying = false;
-    playButton.textContent = "play";
+    const playButton = document.createElement("div");
+    playButton.classList.add("shape");
+    playButton.id = "playBtn"
+    function playAudio(audioElement) {
+      audioElement.play();
+      playButton.classList.remove("triangle");
+      playButton.classList.add("square");
+      return true;
+    }
+    function pauseAudio(audioElement) {
+      audioElement.pause();
+      playButton.classList.remove("square");
+      playButton.classList.add("triangle");
+      return false;
+    }
+    let isPlaying = pauseAudio(audioElement); // init in non-playing state
+
     playButton.style.font = "inherit";
     playButton.onclick = (event) => {
       event.preventDefault();
-      isPlaying = !isPlaying;
-      playButton.textContent = (isPlaying) ? "pause" : "play";
-      if (isPlaying) {
-        audioElement.play()
-      } else
-        audioElement.pause()
+      isPlaying = (isPlaying) ? pauseAudio(audioElement) : playAudio(audioElement);
     }
     formHeader.appendChild(playButton);
     form.appendChild(formHeader)

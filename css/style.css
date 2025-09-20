@@ -366,6 +366,31 @@ textarea {
   box-shadow: black 5px 5px 1em;
 }
 
+
+#playBtn {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+
+.shape {
+  margin: 0 auto;
+}
+
+.square {
+  width: 2rem;
+  height: 2rem;
+  background-color: #e5e4e6;
+}
+
+.triangle {
+  height: 0;
+  width: 0;
+  border-top: 1rem solid transparent;
+  border-left: 2rem solid #e5e4e6;
+  border-bottom: 1rem solid transparent;
+}
+
 .file-upload-div {
   background-color: #1C1B1A;
   color: white;
